@@ -3,20 +3,16 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 
 # --- 1. CONFIGURATION & TITLE ---
 st.set_page_config(page_title="Tax-Efficient Quant Optimizer", layout="wide")
 st.title("🤖 AI Tax-Aware Portfolio Optimizer")
-st.markdown("""
-This tool uses **Modern Portfolio Theory (MPT)** to find the mathematical "sweet spot" for your investments.
-It balances **Risk vs. Reward** while accounting for **Indian Capital Gains Taxes**.
-""")
+st.markdown("### The Bridge Between Quantitative Finance & Tax Strategy")
 
-# --- 2. SIDEBAR INPUTS (The "Tax" & "Quant" Parameters) ---
+# --- 2. SIDEBAR INPUTS ---
 st.sidebar.header("⚙️ Portfolio Settings")
 
-# PRE-DEFINED LIST OF TOP INDIAN STOCKS (Nifty 50 Giants)
-# This prevents typos and ensures data exists.
 nifty_stocks = [
     "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", 
     "HINDUNILVR.NS", "ITC.NS", "SBIN.NS", "BHARTIARTL.NS", "LICI.NS", 
@@ -26,141 +22,168 @@ nifty_stocks = [
     "M&M.NS", "JSWSTEEL.NS", "ADANIENT.NS", "ADANIPORTS.NS", "COALINDIA.NS"
 ]
 
-# DROPDOWN MULTI-SELECT
 selected_tickers = st.sidebar.multiselect(
-    "Select Assets for Portfolio", 
+    "Select Assets (Min 2)", 
     options=nifty_stocks,
-    default=["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS"] # Default selection
+    default=["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS"]
 )
 
-# Tax Inputs
-st.sidebar.header("Tax Regime Assumptions")
-tax_rate = st.sidebar.slider("Est. Effective Tax Rate (%)", 0, 30, 10, help="Approx 12.5% for Long Term Gains > 1.25L")
+tax_rate = st.sidebar.slider("Est. Effective Tax Rate (%)", 0, 30, 10)
 tax_impact = tax_rate / 100
-
-# Date Range
 start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2020-01-01"))
 end_date = st.sidebar.date_input("End Date", pd.to_datetime("today"))
 
-# --- 3. DATA FETCHING ENGINE ---
+# --- 3. DATA ENGINE ---
 @st.cache_data
 def get_stock_data(tickers, start, end):
-    if not tickers: return pd.DataFrame() # Handle empty selection
+    if not tickers: return pd.DataFrame()
     data = yf.download(tickers, start=start, end=end)['Close']
     return data
 
-# --- MAIN APP LOGIC ---
-if st.sidebar.button("Run Optimization"):
-    if not selected_tickers:
-        st.error("⚠️ Please select at least 2 stocks from the sidebar to create a portfolio.")
+# --- TABS LAYOUT ---
+tab1, tab2 = st.tabs(["🚀 Run Optimizer", "📘 Quant Concepts & Formulas"])
+
+with tab1:
+    if st.sidebar.button("Run Optimization"):
+        if len(selected_tickers) < 2:
+            st.error("⚠️ Please select at least 2 stocks.")
+        else:
+            with st.spinner('Calculating Efficient Frontier & Risk Metrics...'):
+                try:
+                    df = get_stock_data(selected_tickers, start_date, end_date)
+                    
+                    if df.empty:
+                        st.error("No data returned. Try different dates.")
+                    else:
+                        daily_returns = df.pct_change().dropna()
+                        
+                        # --- MONTE CARLO SIMULATION ---
+                        num_portfolios = 5000
+                        results = np.zeros((6, num_portfolios)) # Added rows for VaR/CVaR
+                        weights_record = []
+
+                        mean_daily_returns = daily_returns.mean()
+                        cov_matrix = daily_returns.cov()
+
+                        for i in range(num_portfolios):
+                            weights = np.random.random(len(selected_tickers))
+                            weights /= np.sum(weights)
+                            weights_record.append(weights)
+
+                            # Portfolio Return & Volatility
+                            port_return = np.sum(mean_daily_returns * weights) * 252
+                            port_std_dev = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights))) * np.sqrt(252)
+                            
+                            # Sharpe Ratio
+                            sharpe_ratio = (port_return - 0.06) / port_std_dev
+
+                            # Advanced Risk Metrics (VaR & CVaR)
+                            # We simulate historical portfolio returns to find the tail risk
+                            sim_returns = daily_returns.dot(weights)
+                            var_95 = np.percentile(sim_returns, 5) # 5th percentile
+                            cvar_95 = sim_returns[sim_returns <= var_95].mean() # Mean of the worst 5%
+
+                            # Tax Impact
+                            post_tax_return = port_return * (1 - tax_impact)
+
+                            results[0,i] = port_return
+                            results[1,i] = port_std_dev
+                            results[2,i] = sharpe_ratio
+                            results[3,i] = post_tax_return
+                            results[4,i] = var_95
+                            results[5,i] = cvar_95
+
+                        # Store results
+                        columns = ['Return', 'Risk', 'Sharpe', 'Post_Tax_Return', 'VaR_95', 'CVaR_95']
+                        sim_df = pd.DataFrame(results.T, columns=columns)
+                        
+                        # Find Optimal Portfolio
+                        max_sharpe_idx = sim_df['Sharpe'].idxmax()
+                        max_sharpe_port = sim_df.iloc[max_sharpe_idx]
+                        optimal_weights = weights_record[max_sharpe_idx]
+
+                        # --- DISPLAY METRICS ---
+                        st.success("Optimization Complete!")
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        col1.metric("💰 Annual Return", f"{max_sharpe_port['Return']:.1%}", delta=f"Post-Tax: {max_sharpe_port['Post_Tax_Return']:.1%}")
+                        col2.metric("📉 Volatility (Risk)", f"{max_sharpe_port['Risk']:.1%}")
+                        col3.metric("⚠️ 95% VaR", f"{max_sharpe_port['VaR_95']:.2%}", help="Minimum loss on the worst 5% of days")
+                        col4.metric("☢️ 95% CVaR", f"{max_sharpe_port['CVaR_95']:.2%}", help="Average loss when things go really bad")
+
+                        # --- CHARTS ---
+                        c1, c2 = st.columns([2,1])
+                        
+                        with c1:
+                            st.subheader("Efficient Frontier")
+                            fig = px.scatter(
+                                sim_df, x='Risk', y='Return', color='Sharpe',
+                                title="Risk vs Return Landscape", color_continuous_scale='Viridis'
+                            )
+                            fig.add_scatter(x=[max_sharpe_port['Risk']], y=[max_sharpe_port['Return']], 
+                                            mode='markers', marker=dict(color='red', size=20, symbol='star'),
+                                            name='Optimal Portfolio')
+                            st.plotly_chart(fig, use_container_width=True)
+
+                        with c2:
+                            st.subheader("Optimal Allocation")
+                            # Filter small weights for cleaner chart
+                            alloc_df = pd.DataFrame({'Asset': selected_tickers, 'Weight': optimal_weights})
+                            alloc_df = alloc_df[alloc_df['Weight'] > 0.01]
+                            fig_pie = px.pie(alloc_df, values='Weight', names='Asset', hole=0.4)
+                            st.plotly_chart(fig_pie, use_container_width=True)
+
+                except Exception as e:
+                    st.error(f"Error: {e}")
     else:
-        with st.spinner('🤖 Crunching numbers, simulating 5,000 market scenarios...'):
-            
-            try:
-                # Get Data
-                df = get_stock_data(selected_tickers, start_date, end_date)
-                
-                if df.empty:
-                    st.error("No data returned. Try different dates.")
-                else:
-                    # Daily Returns
-                    daily_returns = df.pct_change()
-                    
-                    # --- 4. MONTE CARLO SIMULATION ---
-                    num_portfolios = 5000
-                    results = np.zeros((4, num_portfolios)) 
-                    weights_record = []
+        st.info("👈 Use the sidebar to select assets and click 'Run Optimization'")
 
-                    mean_daily_returns = daily_returns.mean()
-                    cov_matrix = daily_returns.cov()
+with tab2:
+    st.header("🧠 The Math Behind the Model")
+    st.markdown("""
+    This section explains the Quantitative Finance concepts used in this tool. 
+    Reviewing this will help you answer technical interview questions.
+    """)
 
-                    for i in range(num_portfolios):
-                        weights = np.random.random(len(selected_tickers))
-                        weights /= np.sum(weights)
-                        weights_record.append(weights)
+    st.markdown("---")
 
-                        # Annualized Return & Risk
-                        portfolio_return = np.sum(mean_daily_returns * weights) * 252
-                        portfolio_std_dev = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights))) * np.sqrt(252)
-                        
-                        # Sharpe Ratio (Assuming 6% Risk Free Rate for India)
-                        sharpe_ratio = (portfolio_return - 0.06) / portfolio_std_dev
+    # CONCEPT 1: SHARPE RATIO
+    st.subheader("1. Sharpe Ratio (The Efficiency Score)")
+    st.markdown("""
+    **Why use it?** Returns alone are meaningless without knowing the risk taken to get them. The Sharpe Ratio tells us 
+    "how much return we are getting per unit of risk."
+    """)
+    st.latex(r'''
+    Sharpe = \frac{R_p - R_f}{\sigma_p}
+    ''')
+    st.markdown("""
+    * $R_p$: Expected Portfolio Return
+    * $R_f$: Risk-Free Rate (we assumed 6.0%)
+    * $\sigma_p$: Portfolio Standard Deviation (Volatility)
+    """)
 
-                        # Tax Calc
-                        post_tax_return = portfolio_return * (1 - tax_impact)
+    st.markdown("---")
 
-                        results[0,i] = portfolio_return
-                        results[1,i] = portfolio_std_dev
-                        results[2,i] = sharpe_ratio
-                        results[3,i] = post_tax_return
+    # CONCEPT 2: VALUE AT RISK (VaR)
+    st.subheader("2. Value at Risk (VaR 95%)")
+    st.markdown("""
+    **Why use it?** Volatility ($\sigma$) assumes risk is symmetrical (upside is the same as downside). 
+    Banks care about **Downside Risk**. VaR answers: *"On a really bad day (worst 5%), how much could I lose?"*
+    """)
+    st.latex(r'''
+    VaR_{\alpha} = \mu + z_{\alpha} \cdot \sigma
+    ''')
+    st.write("In our Monte Carlo simulation, we calculate this empirically by sorting the returns of 5,000 portfolios and finding the 5th percentile.")
 
-                    sim_df = pd.DataFrame(results.T, columns=['Return', 'Risk', 'Sharpe', 'Post_Tax_Return'])
-                    
-                    # Optimal Portfolio
-                    max_sharpe_idx = sim_df['Sharpe'].idxmax()
-                    max_sharpe_port = sim_df.iloc[max_sharpe_idx]
-                    optimal_weights = weights_record[max_sharpe_idx]
+    st.markdown("---")
 
-                    # --- 5. VISUALIZATION ---
-                    
-                    # TOP ROW: METRICS
-                    st.success("Optimization Complete! Here is your optimal strategy:")
-                    
-                    m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("💰 Expected Return (Yearly)", f"{max_sharpe_port['Return']:.1%}")
-                    m2.metric("📉 Risk (Volatility)", f"{max_sharpe_port['Risk']:.1%}")
-                    m3.metric("💸 Tax Drag", f"-{(max_sharpe_port['Return'] - max_sharpe_port['Post_Tax_Return']):.1%}", help="Return lost to taxes")
-                    m4.metric("✅ Post-Tax Return", f"{max_sharpe_port['Post_Tax_Return']:.1%}")
-
-                    # MIDDLE ROW: CHARTS
-                    col1, col2 = st.columns([2, 1])
-
-                    with col1:
-                        st.subheader("1️⃣ The Efficient Frontier")
-                        fig = px.scatter(
-                            sim_df, x='Risk', y='Return', color='Sharpe',
-                            title="Risk vs Return of 5,000 Possible Portfolios",
-                            color_continuous_scale='RdYlGn' # Red to Green color scale
-                        )
-                        fig.add_scatter(x=[max_sharpe_port['Risk']], y=[max_sharpe_port['Return']], 
-                                        mode='markers', marker=dict(color='red', size=20, symbol='star'),
-                                        name='★ Optimal Portfolio')
-                        st.plotly_chart(fig, use_container_width=True)
-
-                    with col2:
-                        st.subheader("2️⃣ Ideal Allocation")
-                        allocation_df = pd.DataFrame({'Asset': selected_tickers, 'Weight': optimal_weights})
-                        # Filter out tiny weights (<1%) for cleaner chart
-                        allocation_df = allocation_df[allocation_df['Weight'] > 0.01]
-                        
-                        fig_pie = px.pie(allocation_df, values='Weight', names='Asset', hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
-                        st.plotly_chart(fig_pie, use_container_width=True)
-
-                    # --- 6. AI ANALYST COMMENTARY ---
-                    st.markdown("---")
-                    st.subheader("🧠 The AI Analyst's Review")
-                    
-                    # Logic to generate text
-                    best_asset = allocation_df.sort_values(by="Weight", ascending=False).iloc[0]
-                    risk_level = "High" if max_sharpe_port['Risk'] > 0.20 else "Moderate" if max_sharpe_port['Risk'] > 0.12 else "Low"
-                    
-                    st.write(f"""
-                    Based on the simulation of **{start_date.year} to {end_date.year}** data:
-                    
-                    * **Winning Strategy:** The model suggests heavily weighting **{best_asset['Asset']}** ({best_asset['Weight']:.1%} allocation). This stock has historically provided the best returns relative to its stability.
-                    * **Risk Profile:** This portfolio has a **{risk_level}** risk profile ({max_sharpe_port['Risk']:.1%} volatility). 
-                    * **Tax Efficiency:** You are losing approximately **{(max_sharpe_port['Return'] - max_sharpe_port['Post_Tax_Return']):.1%}** of your gains to taxes annually. 
-                    """)
-                    
-                    with st.expander("📚 Terminology Guide (Click to Learn)"):
-                        st.write("""
-                        * **Sharpe Ratio:** The 'Efficiency Score' of a portfolio. A higher number means you are getting more return for every unit of risk you take.
-                        * **Volatility:** How much the portfolio value bounces up and down. Lower is generally better for peace of mind.
-                        * **Efficient Frontier:** The curve on the graph. Any portfolio ON the line is 'Efficient'. Anything below it is 'Bad' (taking risk without getting enough return).
-                        """)
-
-            except Exception as e:
-                st.error(f"Something went wrong: {e}")
-
-else:
-    st.info("👈 Select your stocks from the dropdown and click 'Run Optimization' to start.")
+    # CONCEPT 3: TAX DRAG
+    st.subheader("3. Tax Drag (The Analyst's Edge)")
+    st.markdown("""
+    **Why use it?** Most algorithms optimize for *Pre-Tax* returns. In the real world, what matters is what you keep.
+    We introduce a simple linear scalar to adjust the Efficient Frontier.
+    """)
+    st.latex(r'''
+    R_{post-tax} = R_{pre-tax} \times (1 - TaxRate)
+    ''')
+    st.info("In future versions, we can improve this by differentiating between Short-Term (STCG) and Long-Term (LTCG) holdings.")
