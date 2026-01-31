@@ -47,7 +47,7 @@ with tab1:
         if len(selected_tickers) < 2:
             st.error("⚠️ Please select at least 2 stocks.")
         else:
-            with st.spinner('Calculating Efficient Frontier & Risk Metrics...'):
+            with st.spinner('Calculating Efficient Frontier, Risk Metrics & Correlations...'):
                 try:
                     df = get_stock_data(selected_tickers, start_date, end_date)
                     
@@ -134,7 +134,7 @@ with tab1:
                             fig_pie = px.pie(alloc_df, values='Weight', names='Asset', hole=0.4)
                             st.plotly_chart(fig_pie, use_container_width=True)
 
-                        # --- 6. EXPLANATION & REAL WORLD EXAMPLE (NEW SECTION) ---
+                        # --- 6. EXPLANATION & REAL WORLD EXAMPLE ---
                         st.divider()
                         st.subheader("📝 Analysis & Real-World Example")
                         
@@ -144,147 +144,4 @@ with tab1:
                             st.markdown("#### 1. What is happening?")
                             top_stock = alloc_df.iloc[0]
                             st.write(f"""
-                            The algorithm ran **5,000 simulations** of potential portfolios. 
-                            It found that to get the highest return for the lowest risk, you should allocate **{top_stock['Weight']:.1%}** of your money to **{top_stock['Asset']}**.
-                            
-                            **Why this mix?**
-                            This specific combination sits on the "Efficient Frontier" (the red star on the chart). Any other combination would either give you less money for the same risk, or force you to take too much risk for the same money.
-                            """)
-                            
-                            st.markdown("#### 2. Risk Summary")
-                            st.write(f"""
-                            * **Volatility ({max_sharpe_port['Risk']:.1%}):** This is the "bounce." A higher number means your account balance swings wildly.
-                            * **VaR ({max_sharpe_port['VaR_95']:.2%}):** This is the "Safety Net." It means on 95 out of 100 days, your daily loss will NOT exceed {max_sharpe_port['VaR_95']:.2%}.
-                            """)
-
-                        with ex_col2:
-                            st.markdown("#### 3. The ₹1 Lakh Example")
-                            st.info("If you invested **₹1,00,000** in this portfolio today:")
-                            
-                            investment = 100000
-                            profit_pre_tax = investment * max_sharpe_port['Return']
-                            tax_bill = profit_pre_tax * tax_impact
-                            profit_post_tax = profit_pre_tax - tax_bill
-                            worst_day_loss = investment * max_sharpe_port['VaR_95'] # VaR is negative
-                            
-                            st.write(f"""
-                            * **Expected Profit (Pre-Tax):** ₹{profit_pre_tax:,.0f}
-                            * **Tax Bill (@{tax_rate}%):** -₹{tax_bill:,.0f} (This is the drag!)
-                            * **Net Profit (In Pocket):** **₹{profit_post_tax:,.0f}**
-                            """)
-                            
-                            st.warning(f"""
-                            **🚨 The Crash Scenario:**
-                            If the market crashes tomorrow (a "VaR Event"), your portfolio value might drop by roughly **₹{abs(worst_day_loss):,.0f}** in a single day. 
-                            Real Quants use this number to set stop-losses.
-                            """)
-
-                except Exception as e:
-                    st.error(f"Error: {e}")
-    else:
-        st.info("👈 Use the sidebar to select assets and click 'Run Optimization'")
-
-with tab2:
-    st.header("🧠 The Math Behind the Model")
-    st.markdown("""
-    This section explains the Quantitative Finance concepts used in this tool. 
-    Reviewing this will help you answer technical interview questions.
-    """)
-
-    st.markdown("---")
-
-    # CONCEPT 1: SHARPE RATIO
-    st.subheader("1. Sharpe Ratio (The Efficiency Score)")
-    st.markdown("""
-    **Why use it?** Returns alone are meaningless without knowing the risk taken to get them. The Sharpe Ratio tells us 
-    "how much return we are getting per unit of risk."
-    """)
-    st.latex(r'''
-    Sharpe = \frac{R_p - R_f}{\sigma_p}
-    ''')
-    st.markdown("""
-    * $R_p$: Expected Portfolio Return
-    * $R_f$: Risk-Free Rate (we assumed 6.0%)
-    * $\sigma_p$: Portfolio Standard Deviation (Volatility)
-    """)
-
-    st.markdown("---")
-
-    # CONCEPT 2: VALUE AT RISK (VaR)
-    st.subheader("2. Value at Risk (VaR 95%)")
-    st.markdown("""
-    **Why use it?** Volatility ($\sigma$) assumes risk is symmetrical (upside is the same as downside). 
-    Banks care about **Downside Risk**. VaR answers: *"On a really bad day (worst 5%), how much could I lose?"*
-    """)
-    st.latex(r'''
-    VaR_{\alpha} = \mu + z_{\alpha} \cdot \sigma
-    ''')
-    st.write("In our Monte Carlo simulation, we calculate this empirically by sorting the returns of 5,000 portfolios and finding the 5th percentile.")
-
-    st.markdown("---")
-
-    # CONCEPT 3: TAX DRAG
-    st.subheader("3. Tax Drag (The Analyst's Edge)")
-    st.markdown("""
-    **Why use it?** Most algorithms optimize for *Pre-Tax* returns. In the real world, what matters is what you keep.
-    We introduce a simple linear scalar to adjust the Efficient Frontier.
-    """)
-    st.latex(r'''
-    R_{post-tax} = R_{pre-tax} \times (1 - TaxRate)
-    ''')
-
-
-st.warning(f"""... If the market crashes tomorrow...""")
-# --- 7. DEEP DIVE VISUALS (NEW ADDITION) ---
-                        st.divider()
-                        st.subheader("🔬 Deep Dive: Correlation & Drawdown")
-                        
-                        d_col1, d_col2 = st.columns(2)
-
-                        with d_col1:
-                            st.markdown("#### Correlation Matrix")
-                            st.caption("How closely do these assets move together? (Light = High Correlation, Dark = Low)")
-                            
-                            # Calculate Correlation
-                            corr_matrix = daily_returns.corr()
-                            
-                            # Plot Heatmap using Plotly
-                            fig_corr = px.imshow(
-                                corr_matrix, 
-                                text_auto=True, 
-                                aspect="auto",
-                                color_continuous_scale='RdBu_r', # Red = High Corr (Bad for diversity)
-                                origin='lower'
-                            )
-                            st.plotly_chart(fig_corr, use_container_width=True)
-                            
-                            st.info("""
-                            **Quant Tip:** You want a portfolio with **lower** correlation numbers (darker colors). 
-                            If everything is '1.0', your portfolio is not diversified!
-                            """)
-
-                        with d_col2:
-                            st.markdown("#### Max Drawdown (The 'Pain' Chart)")
-                            st.caption("Percentage fall from the highest peak value over time.")
-                            
-                            # Calculate Cumulative Return of the Optimized Portfolio
-                            # We assume we rebalance daily to the optimal weights (simplified)
-                            cumulative_returns = (1 + daily_returns.dot(optimal_weights)).cumprod()
-                            
-                            # Calculate Drawdown
-                            peak = cumulative_returns.cummax()
-                            drawdown = (cumulative_returns - peak) / peak
-                            
-                            # Plot Drawdown
-                            fig_dd = px.area(
-                                drawdown, 
-                                title="Portfolio Drawdown History",
-                                labels={'value': 'Drawdown %', 'Date': 'Year'},
-                                color_discrete_sequence=['red']
-                            )
-                            # Fix the Y-axis to look like percentage
-                            fig_dd.update_layout(yaxis_tickformat='.0%')
-                            st.plotly_chart(fig_dd, use_container_width=True)
-
-                            max_dd = drawdown.min()
-                            st.error(f"**Max Historical Drawdown:** {max_dd:.1%} (The worst crash this portfolio faced)")
+                            The algorithm ran **5,00
