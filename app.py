@@ -3,7 +3,8 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from textblob import TextBlob # New Library for Sentiment Analysis
+from textblob import TextBlob
+from GoogleNews import GoogleNews # New reliable news source
 
 # --- 1. CONFIGURATION & TITLE ---
 st.set_page_config(page_title="Tax-Efficient Quant Optimizer", layout="wide")
@@ -40,27 +41,30 @@ def get_stock_data(tickers, start, end):
     data = yf.download(tickers, start=start, end=end)['Close']
     return data
 
-# --- 4. SENTIMENT ENGINE (NEW) ---
+# --- 4. SENTIMENT ENGINE (UPDATED TO GOOGLE NEWS) ---
 def get_sentiment(tickers):
     sentiment_data = []
+    googlenews = GoogleNews(lang='en', region='IN', period='1d') # Look for news from the last 24h
     
     for ticker in tickers:
         try:
-            # Fetch News using yfinance
-            stock = yf.Ticker(ticker)
-            news = stock.news
+            # Clean the ticker: "RELIANCE.NS" -> "RELIANCE stock" for better search results
+            clean_name = ticker.replace(".NS", "")
+            search_term = f"{clean_name} stock news"
             
-            if news:
-                # Combine all headlines into one big text block for analysis
-                all_text = " ".join([n['title'] for n in news])
+            # Fetch News
+            googlenews.clear() # Clear past results
+            googlenews.search(search_term)
+            result = googlenews.result()
+            
+            if result:
+                # Combine top 3 headlines for analysis
+                top_3_headlines = " ".join([item['title'] for item in result[:3]])
+                latest_headline = result[0]['title']
                 
-                # Analyze Sentiment using TextBlob
-                # Polarity: -1 (Negative) to +1 (Positive)
-                analysis = TextBlob(all_text)
+                # Analyze Sentiment
+                analysis = TextBlob(top_3_headlines)
                 score = analysis.sentiment.polarity
-                
-                # Get the latest headline for display
-                latest_headline = news[0]['title']
             else:
                 score = 0
                 latest_headline = "No recent news found."
@@ -72,12 +76,11 @@ def get_sentiment(tickers):
             })
             
         except Exception as e:
-             sentiment_data.append({"Asset": ticker, "Sentiment Score": 0, "Latest News": "Error fetching news"})
+             sentiment_data.append({"Asset": ticker, "Sentiment Score": 0, "Latest News": "Could not fetch data"})
              
     return pd.DataFrame(sentiment_data)
 
 # --- TABS LAYOUT ---
-# Updated to include the new 3rd Tab
 tab1, tab2, tab3 = st.tabs(["🚀 Run Optimizer", "📰 AI News Sentiment", "📘 Quant Concepts"])
 
 with tab1:
@@ -215,10 +218,10 @@ with tab1:
 
 with tab2:
     st.header("📰 AI News Analysis (Live)")
-    st.markdown("This tool fetches the latest news headlines from Yahoo Finance and uses **Natural Language Processing (NLP)** to score the sentiment.")
+    st.markdown("This tool fetches the latest news headlines using **Google News** and uses **Natural Language Processing (NLP)** to score the sentiment.")
     
     if st.button("Analyze News Sentiment"):
-        with st.spinner("Reading the news..."):
+        with st.spinner("Searching Google News & analyzing sentiment..."):
             sent_df = get_sentiment(selected_tickers)
             
             # Display Key Metrics
@@ -237,7 +240,7 @@ with tab2:
             **How it works:**
             * **Score > 0:** The news language is generally positive/optimistic.
             * **Score < 0:** The news language is generally negative/pessimistic.
-            * We use the `TextBlob` library to tokenize and evaluate adjectives in the headlines.
+            * We search Google News for headlines (e.g., 'TCS stock news') and analyze the text.
             """)
 
 with tab3:
