@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.express as px
+from textblob import TextBlob # New Library for Sentiment Analysis
 
 # --- 1. CONFIGURATION & TITLE ---
 st.set_page_config(page_title="Tax-Efficient Quant Optimizer", layout="wide")
@@ -39,8 +40,45 @@ def get_stock_data(tickers, start, end):
     data = yf.download(tickers, start=start, end=end)['Close']
     return data
 
+# --- 4. SENTIMENT ENGINE (NEW) ---
+def get_sentiment(tickers):
+    sentiment_data = []
+    
+    for ticker in tickers:
+        try:
+            # Fetch News using yfinance
+            stock = yf.Ticker(ticker)
+            news = stock.news
+            
+            if news:
+                # Combine all headlines into one big text block for analysis
+                all_text = " ".join([n['title'] for n in news])
+                
+                # Analyze Sentiment using TextBlob
+                # Polarity: -1 (Negative) to +1 (Positive)
+                analysis = TextBlob(all_text)
+                score = analysis.sentiment.polarity
+                
+                # Get the latest headline for display
+                latest_headline = news[0]['title']
+            else:
+                score = 0
+                latest_headline = "No recent news found."
+                
+            sentiment_data.append({
+                "Asset": ticker,
+                "Sentiment Score": score,
+                "Latest News": latest_headline
+            })
+            
+        except Exception as e:
+             sentiment_data.append({"Asset": ticker, "Sentiment Score": 0, "Latest News": "Error fetching news"})
+             
+    return pd.DataFrame(sentiment_data)
+
 # --- TABS LAYOUT ---
-tab1, tab2 = st.tabs(["🚀 Run Optimizer", "📘 Quant Concepts & Formulas"])
+# Updated to include the new 3rd Tab
+tab1, tab2, tab3 = st.tabs(["🚀 Run Optimizer", "📰 AI News Sentiment", "📘 Quant Concepts"])
 
 with tab1:
     if st.sidebar.button("Run Optimization"):
@@ -69,19 +107,14 @@ with tab1:
                             weights /= np.sum(weights)
                             weights_record.append(weights)
 
-                            # Portfolio Return & Volatility
                             port_return = np.sum(mean_daily_returns * weights) * 252
                             port_std_dev = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights))) * np.sqrt(252)
-                            
-                            # Sharpe Ratio
                             sharpe_ratio = (port_return - 0.06) / port_std_dev
 
-                            # Advanced Risk Metrics (VaR & CVaR)
                             sim_returns = daily_returns.dot(weights)
-                            var_95 = np.percentile(sim_returns, 5) # 5th percentile
+                            var_95 = np.percentile(sim_returns, 5)
                             cvar_95 = sim_returns[sim_returns <= var_95].mean()
 
-                            # Tax Impact
                             post_tax_return = port_return * (1 - tax_impact)
 
                             results[0,i] = port_return
@@ -91,11 +124,9 @@ with tab1:
                             results[4,i] = var_95
                             results[5,i] = cvar_95
 
-                        # Store results
                         columns = ['Return', 'Risk', 'Sharpe', 'Post_Tax_Return', 'VaR_95', 'CVaR_95']
                         sim_df = pd.DataFrame(results.T, columns=columns)
                         
-                        # Find Optimal Portfolio
                         max_sharpe_idx = sim_df['Sharpe'].idxmax()
                         max_sharpe_port = sim_df.iloc[max_sharpe_idx]
                         optimal_weights = weights_record[max_sharpe_idx]
@@ -126,15 +157,12 @@ with tab1:
                         with c2:
                             st.subheader("Optimal Allocation")
                             alloc_df = pd.DataFrame({'Asset': selected_tickers, 'Weight': optimal_weights})
-                            alloc_df = alloc_df[alloc_df['Weight'] > 0.01] # Filter small weights
-                            
-                            # Sort for better summary later
+                            alloc_df = alloc_df[alloc_df['Weight'] > 0.01] 
                             alloc_df = alloc_df.sort_values(by="Weight", ascending=False)
-                            
                             fig_pie = px.pie(alloc_df, values='Weight', names='Asset', hole=0.4)
                             st.plotly_chart(fig_pie, use_container_width=True)
 
-                        # --- 6. EXPLANATION & REAL WORLD EXAMPLE ---
+                        # --- SCENARIO ANALYSIS ---
                         st.divider()
                         st.subheader("📝 Analysis & Real-World Example")
                         
@@ -144,88 +172,41 @@ with tab1:
                             st.markdown("#### 1. What is happening?")
                             top_stock = alloc_df.iloc[0]
                             st.write(f"""
-                            The algorithm ran **5,000 simulations** of potential portfolios. 
-                            It found that to get the highest return for the lowest risk, you should allocate **{top_stock['Weight']:.1%}** of your money to **{top_stock['Asset']}**.
+                            The algorithm ran **5,000 simulations** and suggests allocating **{top_stock['Weight']:.1%}** to **{top_stock['Asset']}**.
+                            This balance maximizes return for your accepted level of risk.
                             """)
-                            
-                            st.markdown("#### 2. Risk Summary")
-                            st.write(f"""
-                            * **Volatility ({max_sharpe_port['Risk']:.1%}):** This is the "bounce." A higher number means your account balance swings wildly.
-                            * **VaR ({max_sharpe_port['VaR_95']:.2%}):** This is the "Safety Net." It means on 95 out of 100 days, your daily loss will NOT exceed {max_sharpe_port['VaR_95']:.2%}.
-                            """)
-
+                        
                         with ex_col2:
-                            st.markdown("#### 3. The ₹1 Lakh Example")
-                            st.info("If you invested **₹1,00,000** in this portfolio today:")
-                            
+                            st.markdown("#### 2. The ₹1 Lakh Example")
                             investment = 100000
                             profit_pre_tax = investment * max_sharpe_port['Return']
                             tax_bill = profit_pre_tax * tax_impact
                             profit_post_tax = profit_pre_tax - tax_bill
-                            worst_day_loss = investment * max_sharpe_port['VaR_95'] # VaR is negative
                             
                             st.write(f"""
                             * **Expected Profit (Pre-Tax):** ₹{profit_pre_tax:,.0f}
-                            * **Tax Bill (@{tax_rate}%):** -₹{tax_bill:,.0f} (This is the drag!)
-                            * **Net Profit (In Pocket):** **₹{profit_post_tax:,.0f}**
-                            """)
-                            
-                            st.warning(f"""
-                            **🚨 The Crash Scenario:**
-                            If the market crashes tomorrow (a "VaR Event"), your portfolio value might drop by roughly **₹{abs(worst_day_loss):,.0f}** in a single day. 
+                            * **Tax Bill (@{tax_rate}%):** -₹{tax_bill:,.0f}
+                            * **Net Profit:** **₹{profit_post_tax:,.0f}**
                             """)
 
-                        # --- 7. DEEP DIVE VISUALS ---
+                        # --- DEEP DIVE ---
                         st.divider()
                         st.subheader("🔬 Deep Dive: Correlation & Drawdown")
-                        
                         d_col1, d_col2 = st.columns(2)
 
                         with d_col1:
                             st.markdown("#### Correlation Matrix")
-                            st.caption("How closely do these assets move together? (Light = High Correlation, Dark = Low)")
-                            
-                            # Calculate Correlation
                             corr_matrix = daily_returns.corr()
-                            
-                            # Plot Heatmap using Plotly
-                            fig_corr = px.imshow(
-                                corr_matrix, 
-                                text_auto=True, 
-                                aspect="auto",
-                                color_continuous_scale='RdBu_r', # Red = High Corr (Bad for diversity)
-                                origin='lower'
-                            )
+                            fig_corr = px.imshow(corr_matrix, text_auto=True, aspect="auto", color_continuous_scale='RdBu_r', origin='lower')
                             st.plotly_chart(fig_corr, use_container_width=True)
-                            
-                            st.info("""
-                            **Quant Tip:** You want a portfolio with **lower** correlation numbers (darker colors). 
-                            If everything is '1.0', your portfolio is not diversified!
-                            """)
 
                         with d_col2:
-                            st.markdown("#### Max Drawdown (The 'Pain' Chart)")
-                            st.caption("Percentage fall from the highest peak value over time.")
-                            
-                            # Calculate Cumulative Return of the Optimized Portfolio
+                            st.markdown("#### Max Drawdown")
                             cumulative_returns = (1 + daily_returns.dot(optimal_weights)).cumprod()
-                            
-                            # Calculate Drawdown
-                            peak = cumulative_returns.cummax()
-                            drawdown = (cumulative_returns - peak) / peak
-                            
-                            # Plot Drawdown
-                            fig_dd = px.area(
-                                drawdown, 
-                                title="Portfolio Drawdown History",
-                                labels={'value': 'Drawdown %', 'Date': 'Year'},
-                                color_discrete_sequence=['red']
-                            )
+                            drawdown = (cumulative_returns - cumulative_returns.cummax()) / cumulative_returns.cummax()
+                            fig_dd = px.area(drawdown, title="Drawdown History", color_discrete_sequence=['red'])
                             fig_dd.update_layout(yaxis_tickformat='.0%')
                             st.plotly_chart(fig_dd, use_container_width=True)
-
-                            max_dd = drawdown.min()
-                            st.error(f"**Max Historical Drawdown:** {max_dd:.1%} (The worst crash this portfolio faced)")
 
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -233,50 +214,37 @@ with tab1:
         st.info("👈 Use the sidebar to select assets and click 'Run Optimization'")
 
 with tab2:
+    st.header("📰 AI News Analysis (Live)")
+    st.markdown("This tool fetches the latest news headlines from Yahoo Finance and uses **Natural Language Processing (NLP)** to score the sentiment.")
+    
+    if st.button("Analyze News Sentiment"):
+        with st.spinner("Reading the news..."):
+            sent_df = get_sentiment(selected_tickers)
+            
+            # Display Key Metrics
+            avg_sentiment = sent_df['Sentiment Score'].mean()
+            sentiment_label = "Positive 🟢" if avg_sentiment > 0.05 else "Negative 🔴" if avg_sentiment < -0.05 else "Neutral ⚪"
+            
+            st.metric("Overall Portfolio Mood", sentiment_label, delta=f"{avg_sentiment:.3f} Score")
+            
+            # Display detailed Dataframe with styling
+            st.dataframe(
+                sent_df.style.background_gradient(subset=['Sentiment Score'], cmap='RdYlGn', vmin=-0.5, vmax=0.5),
+                use_container_width=True
+            )
+            
+            st.info("""
+            **How it works:**
+            * **Score > 0:** The news language is generally positive/optimistic.
+            * **Score < 0:** The news language is generally negative/pessimistic.
+            * We use the `TextBlob` library to tokenize and evaluate adjectives in the headlines.
+            """)
+
+with tab3:
     st.header("🧠 The Math Behind the Model")
-    st.markdown("""
-    This section explains the Quantitative Finance concepts used in this tool. 
-    Reviewing this will help you answer technical interview questions.
-    """)
-
-    st.markdown("---")
-
-    # CONCEPT 1: SHARPE RATIO
-    st.subheader("1. Sharpe Ratio (The Efficiency Score)")
-    st.markdown("""
-    **Why use it?** Returns alone are meaningless without knowing the risk taken to get them. The Sharpe Ratio tells us 
-    "how much return we are getting per unit of risk."
-    """)
-    st.latex(r'''
-    Sharpe = \frac{R_p - R_f}{\sigma_p}
-    ''')
-    st.markdown("""
-    * $R_p$: Expected Portfolio Return
-    * $R_f$: Risk-Free Rate (we assumed 6.0%)
-    * $\sigma_p$: Portfolio Standard Deviation (Volatility)
-    """)
-
-    st.markdown("---")
-
-    # CONCEPT 2: VALUE AT RISK (VaR)
-    st.subheader("2. Value at Risk (VaR 95%)")
-    st.markdown("""
-    **Why use it?** Volatility ($\sigma$) assumes risk is symmetrical (upside is the same as downside). 
-    Banks care about **Downside Risk**. VaR answers: *"On a really bad day (worst 5%), how much could I lose?"*
-    """)
-    st.latex(r'''
-    VaR_{\alpha} = \mu + z_{\alpha} \cdot \sigma
-    ''')
-    st.write("In our Monte Carlo simulation, we calculate this empirically by sorting the returns of 5,000 portfolios and finding the 5th percentile.")
-
-    st.markdown("---")
-
-    # CONCEPT 3: TAX DRAG
-    st.subheader("3. Tax Drag (The Analyst's Edge)")
-    st.markdown("""
-    **Why use it?** Most algorithms optimize for *Pre-Tax* returns. In the real world, what matters is what you keep.
-    We introduce a simple linear scalar to adjust the Efficient Frontier.
-    """)
-    st.latex(r'''
-    R_{post-tax} = R_{pre-tax} \times (1 - TaxRate)
-    ''')
+    st.markdown("### 1. Sharpe Ratio")
+    st.latex(r'''Sharpe = \frac{R_p - R_f}{\sigma_p}''')
+    st.markdown("### 2. Value at Risk (VaR)")
+    st.latex(r'''VaR_{\alpha} = \mu + z_{\alpha} \cdot \sigma''')
+    st.markdown("### 3. Tax Drag")
+    st.latex(r'''R_{post-tax} = R_{pre-tax} \times (1 - TaxRate)''')
