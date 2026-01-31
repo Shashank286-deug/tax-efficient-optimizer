@@ -3,7 +3,6 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
 
 # --- 1. CONFIGURATION & TITLE ---
 st.set_page_config(page_title="Tax-Efficient Quant Optimizer", layout="wide")
@@ -59,7 +58,7 @@ with tab1:
                         
                         # --- MONTE CARLO SIMULATION ---
                         num_portfolios = 5000
-                        results = np.zeros((6, num_portfolios)) # Added rows for VaR/CVaR
+                        results = np.zeros((6, num_portfolios))
                         weights_record = []
 
                         mean_daily_returns = daily_returns.mean()
@@ -78,10 +77,9 @@ with tab1:
                             sharpe_ratio = (port_return - 0.06) / port_std_dev
 
                             # Advanced Risk Metrics (VaR & CVaR)
-                            # We simulate historical portfolio returns to find the tail risk
                             sim_returns = daily_returns.dot(weights)
                             var_95 = np.percentile(sim_returns, 5) # 5th percentile
-                            cvar_95 = sim_returns[sim_returns <= var_95].mean() # Mean of the worst 5%
+                            cvar_95 = sim_returns[sim_returns <= var_95].mean()
 
                             # Tax Impact
                             post_tax_return = port_return * (1 - tax_impact)
@@ -127,11 +125,59 @@ with tab1:
 
                         with c2:
                             st.subheader("Optimal Allocation")
-                            # Filter small weights for cleaner chart
                             alloc_df = pd.DataFrame({'Asset': selected_tickers, 'Weight': optimal_weights})
-                            alloc_df = alloc_df[alloc_df['Weight'] > 0.01]
+                            alloc_df = alloc_df[alloc_df['Weight'] > 0.01] # Filter small weights
+                            
+                            # Sort for better summary later
+                            alloc_df = alloc_df.sort_values(by="Weight", ascending=False)
+                            
                             fig_pie = px.pie(alloc_df, values='Weight', names='Asset', hole=0.4)
                             st.plotly_chart(fig_pie, use_container_width=True)
+
+                        # --- 6. EXPLANATION & REAL WORLD EXAMPLE (NEW SECTION) ---
+                        st.divider()
+                        st.subheader("📝 Analysis & Real-World Example")
+                        
+                        ex_col1, ex_col2 = st.columns(2)
+                        
+                        with ex_col1:
+                            st.markdown("#### 1. What is happening?")
+                            top_stock = alloc_df.iloc[0]
+                            st.write(f"""
+                            The algorithm ran **5,000 simulations** of potential portfolios. 
+                            It found that to get the highest return for the lowest risk, you should allocate **{top_stock['Weight']:.1%}** of your money to **{top_stock['Asset']}**.
+                            
+                            **Why this mix?**
+                            This specific combination sits on the "Efficient Frontier" (the red star on the chart). Any other combination would either give you less money for the same risk, or force you to take too much risk for the same money.
+                            """)
+                            
+                            st.markdown("#### 2. Risk Summary")
+                            st.write(f"""
+                            * **Volatility ({max_sharpe_port['Risk']:.1%}):** This is the "bounce." A higher number means your account balance swings wildly.
+                            * **VaR ({max_sharpe_port['VaR_95']:.2%}):** This is the "Safety Net." It means on 95 out of 100 days, your daily loss will NOT exceed {max_sharpe_port['VaR_95']:.2%}.
+                            """)
+
+                        with ex_col2:
+                            st.markdown("#### 3. The ₹1 Lakh Example")
+                            st.info("If you invested **₹1,00,000** in this portfolio today:")
+                            
+                            investment = 100000
+                            profit_pre_tax = investment * max_sharpe_port['Return']
+                            tax_bill = profit_pre_tax * tax_impact
+                            profit_post_tax = profit_pre_tax - tax_bill
+                            worst_day_loss = investment * max_sharpe_port['VaR_95'] # VaR is negative
+                            
+                            st.write(f"""
+                            * **Expected Profit (Pre-Tax):** ₹{profit_pre_tax:,.0f}
+                            * **Tax Bill (@{tax_rate}%):** -₹{tax_bill:,.0f} (This is the drag!)
+                            * **Net Profit (In Pocket):** **₹{profit_post_tax:,.0f}**
+                            """)
+                            
+                            st.warning(f"""
+                            **🚨 The Crash Scenario:**
+                            If the market crashes tomorrow (a "VaR Event"), your portfolio value might drop by roughly **₹{abs(worst_day_loss):,.0f}** in a single day. 
+                            Real Quants use this number to set stop-losses.
+                            """)
 
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -186,4 +232,3 @@ with tab2:
     st.latex(r'''
     R_{post-tax} = R_{pre-tax} \times (1 - TaxRate)
     ''')
-    st.info("In future versions, we can improve this by differentiating between Short-Term (STCG) and Long-Term (LTCG) holdings.")
