@@ -6,22 +6,36 @@ import plotly.express as px
 
 # --- 1. CONFIGURATION & TITLE ---
 st.set_page_config(page_title="Tax-Efficient Quant Optimizer", layout="wide")
-st.title("📈 Tax-Aware Portfolio Optimizer")
+st.title("🤖 AI Tax-Aware Portfolio Optimizer")
 st.markdown("""
-This tool uses **Modern Portfolio Theory (MPT)** to find the optimal asset allocation, 
-but adjusts for **Capital Gains Tax** to show true realized returns.
+This tool uses **Modern Portfolio Theory (MPT)** to find the mathematical "sweet spot" for your investments.
+It balances **Risk vs. Reward** while accounting for **Indian Capital Gains Taxes**.
 """)
 
 # --- 2. SIDEBAR INPUTS (The "Tax" & "Quant" Parameters) ---
-st.sidebar.header("Portfolio Settings")
+st.sidebar.header("⚙️ Portfolio Settings")
 
-# User inputs tickers (e.g., Reliance, TCS, Infosys)
-tickers_input = st.sidebar.text_input("Enter Tickers (comma separated)", "RELIANCE.NS, TCS.NS, INFY.NS, HDFCBANK.NS")
-tickers = [t.strip() for t in tickers_input.split(',')]
+# PRE-DEFINED LIST OF TOP INDIAN STOCKS (Nifty 50 Giants)
+# This prevents typos and ensures data exists.
+nifty_stocks = [
+    "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", 
+    "HINDUNILVR.NS", "ITC.NS", "SBIN.NS", "BHARTIARTL.NS", "LICI.NS", 
+    "KOTAKBANK.NS", "LT.NS", "HCLTECH.NS", "ASIANPAINT.NS", "AXISBANK.NS",
+    "MARUTI.NS", "SUNPHARMA.NS", "TITAN.NS", "ULTRACEMCO.NS", "BAJFINANCE.NS",
+    "WIPRO.NS", "NESTLEIND.NS", "TATASTEEL.NS", "NTPC.NS", "POWERGRID.NS",
+    "M&M.NS", "JSWSTEEL.NS", "ADANIENT.NS", "ADANIPORTS.NS", "COALINDIA.NS"
+]
 
-# Tax Inputs (Your "Tax Analyst" Speciality)
+# DROPDOWN MULTI-SELECT
+selected_tickers = st.sidebar.multiselect(
+    "Select Assets for Portfolio", 
+    options=nifty_stocks,
+    default=["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS"] # Default selection
+)
+
+# Tax Inputs
 st.sidebar.header("Tax Regime Assumptions")
-tax_rate = st.sidebar.slider("Est. Effective Tax Rate (%)", 0, 30, 10, help="e.g. 12.5% for LTCG or 20% for STCG")
+tax_rate = st.sidebar.slider("Est. Effective Tax Rate (%)", 0, 30, 10, help="Approx 12.5% for Long Term Gains > 1.25L")
 tax_impact = tax_rate / 100
 
 # Date Range
@@ -29,110 +43,124 @@ start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2020-01-01"))
 end_date = st.sidebar.date_input("End Date", pd.to_datetime("today"))
 
 # --- 3. DATA FETCHING ENGINE ---
-@st.cache_data # Caches data so it doesn't reload on every click
+@st.cache_data
 def get_stock_data(tickers, start, end):
+    if not tickers: return pd.DataFrame() # Handle empty selection
     data = yf.download(tickers, start=start, end=end)['Close']
     return data
 
+# --- MAIN APP LOGIC ---
 if st.sidebar.button("Run Optimization"):
-    with st.spinner('Fetching market data and running Monte Carlo simulations...'):
-        
-        # Get Data
-        try:
-            df = get_stock_data(tickers, start_date, end_date)
+    if not selected_tickers:
+        st.error("⚠️ Please select at least 2 stocks from the sidebar to create a portfolio.")
+    else:
+        with st.spinner('🤖 Crunching numbers, simulating 5,000 market scenarios...'):
             
-            # Check if data is empty
-            if df.empty:
-                st.error("No data found. Please check the ticker symbols.")
-            else:
-                # Calculate Daily Returns
-                daily_returns = df.pct_change()
+            try:
+                # Get Data
+                df = get_stock_data(selected_tickers, start_date, end_date)
                 
-                # --- 4. THE QUANT MATH (Monte Carlo Simulation) ---
-                # We will generate 5,000 random portfolios to see which is best
-                num_portfolios = 5000
-                results = np.zeros((4, num_portfolios)) # Storing: Return, Volatility, Sharpe, Tax-Adj Return
-                weights_record = []
-
-                # Annualizing factors (252 trading days in a year)
-                mean_daily_returns = daily_returns.mean()
-                cov_matrix = daily_returns.cov()
-
-                for i in range(num_portfolios):
-                    # Generate random weights for each stock
-                    weights = np.random.random(len(tickers))
-                    weights /= np.sum(weights) # Normalize so sum = 1 (100%)
-                    weights_record.append(weights)
-
-                    # Portfolio Expected Return (Annualized)
-                    portfolio_return = np.sum(mean_daily_returns * weights) * 252
+                if df.empty:
+                    st.error("No data returned. Try different dates.")
+                else:
+                    # Daily Returns
+                    daily_returns = df.pct_change()
                     
-                    # Portfolio Volatility (Risk)
-                    portfolio_std_dev = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights))) * np.sqrt(252)
+                    # --- 4. MONTE CARLO SIMULATION ---
+                    num_portfolios = 5000
+                    results = np.zeros((4, num_portfolios)) 
+                    weights_record = []
+
+                    mean_daily_returns = daily_returns.mean()
+                    cov_matrix = daily_returns.cov()
+
+                    for i in range(num_portfolios):
+                        weights = np.random.random(len(selected_tickers))
+                        weights /= np.sum(weights)
+                        weights_record.append(weights)
+
+                        # Annualized Return & Risk
+                        portfolio_return = np.sum(mean_daily_returns * weights) * 252
+                        portfolio_std_dev = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights))) * np.sqrt(252)
+                        
+                        # Sharpe Ratio (Assuming 6% Risk Free Rate for India)
+                        sharpe_ratio = (portfolio_return - 0.06) / portfolio_std_dev
+
+                        # Tax Calc
+                        post_tax_return = portfolio_return * (1 - tax_impact)
+
+                        results[0,i] = portfolio_return
+                        results[1,i] = portfolio_std_dev
+                        results[2,i] = sharpe_ratio
+                        results[3,i] = post_tax_return
+
+                    sim_df = pd.DataFrame(results.T, columns=['Return', 'Risk', 'Sharpe', 'Post_Tax_Return'])
                     
-                    # Portfolio Sharpe Ratio (assuming 0% risk-free for simplicity)
-                    sharpe_ratio = portfolio_return / portfolio_std_dev
+                    # Optimal Portfolio
+                    max_sharpe_idx = sim_df['Sharpe'].idxmax()
+                    max_sharpe_port = sim_df.iloc[max_sharpe_idx]
+                    optimal_weights = weights_record[max_sharpe_idx]
 
-                    # --- THE "TAX EDGE" ---
-                    # Calculate Post-Tax Return
-                    # We assume the gains are realized and taxed at the user's rate
-                    post_tax_return = portfolio_return * (1 - tax_impact)
+                    # --- 5. VISUALIZATION ---
+                    
+                    # TOP ROW: METRICS
+                    st.success("Optimization Complete! Here is your optimal strategy:")
+                    
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("💰 Expected Return (Yearly)", f"{max_sharpe_port['Return']:.1%}")
+                    m2.metric("📉 Risk (Volatility)", f"{max_sharpe_port['Risk']:.1%}")
+                    m3.metric("💸 Tax Drag", f"-{(max_sharpe_port['Return'] - max_sharpe_port['Post_Tax_Return']):.1%}", help="Return lost to taxes")
+                    m4.metric("✅ Post-Tax Return", f"{max_sharpe_port['Post_Tax_Return']:.1%}")
 
-                    results[0,i] = portfolio_return
-                    results[1,i] = portfolio_std_dev
-                    results[2,i] = sharpe_ratio
-                    results[3,i] = post_tax_return
+                    # MIDDLE ROW: CHARTS
+                    col1, col2 = st.columns([2, 1])
 
-                # Create a DataFrame for visualization
-                sim_df = pd.DataFrame(results.T, columns=['Return', 'Risk', 'Sharpe', 'Post_Tax_Return'])
-                
-                # Find the "Max Sharpe" Portfolio (The mathematically "best" one)
-                max_sharpe_idx = sim_df['Sharpe'].idxmax()
-                max_sharpe_port = sim_df.iloc[max_sharpe_idx]
-                optimal_weights = weights_record[max_sharpe_idx]
+                    with col1:
+                        st.subheader("1️⃣ The Efficient Frontier")
+                        fig = px.scatter(
+                            sim_df, x='Risk', y='Return', color='Sharpe',
+                            title="Risk vs Return of 5,000 Possible Portfolios",
+                            color_continuous_scale='RdYlGn' # Red to Green color scale
+                        )
+                        fig.add_scatter(x=[max_sharpe_port['Risk']], y=[max_sharpe_port['Return']], 
+                                        mode='markers', marker=dict(color='red', size=20, symbol='star'),
+                                        name='★ Optimal Portfolio')
+                        st.plotly_chart(fig, use_container_width=True)
 
-                # --- 5. VISUALIZATION ---
-                
-                # Layout: 2 Columns
-                col1, col2 = st.columns([3, 1])
+                    with col2:
+                        st.subheader("2️⃣ Ideal Allocation")
+                        allocation_df = pd.DataFrame({'Asset': selected_tickers, 'Weight': optimal_weights})
+                        # Filter out tiny weights (<1%) for cleaner chart
+                        allocation_df = allocation_df[allocation_df['Weight'] > 0.01]
+                        
+                        fig_pie = px.pie(allocation_df, values='Weight', names='Asset', hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
+                        st.plotly_chart(fig_pie, use_container_width=True)
 
-                with col1:
-                    st.subheader("Efficient Frontier (Risk vs Return)")
-                    # Plotting the "cloud" of portfolios
-                    fig = px.scatter(
-                        sim_df, x='Risk', y='Return', color='Sharpe',
-                        title="Monte Carlo Simulation (5,000 Portfolios)",
-                        labels={'Risk': 'Volatility (Risk)', 'Return': 'Annualized Return'},
-                        color_continuous_scale='Viridis'
-                    )
-                    # Add a red marker for the optimal portfolio
-                    fig.add_scatter(x=[max_sharpe_port['Risk']], y=[max_sharpe_port['Return']], 
-                                    mode='markers', marker=dict(color='red', size=15, symbol='star'),
-                                    name='Optimal Portfolio')
-                    st.plotly_chart(fig, use_container_width=True)
-
-                with col2:
-                    st.subheader("Optimal Allocation")
-                    # Create a pie chart of the best weights
-                    allocation_df = pd.DataFrame({'Asset': tickers, 'Weight': optimal_weights})
-                    fig_pie = px.pie(allocation_df, values='Weight', names='Asset', hole=0.4)
-                    st.plotly_chart(fig_pie, use_container_width=True)
-
-                    st.info(f"""
-                    **Performance Metrics:**
-                    - 🟢 Pre-Tax Return: {max_sharpe_port['Return']:.2%}
-                    - 🔴 Tax Drag: {(max_sharpe_port['Return'] - max_sharpe_port['Post_Tax_Return']):.2%}
-                    - 🟢 **Post-Tax Return: {max_sharpe_port['Post_Tax_Return']:.2%}**
-                    - ⚠️ Risk (Vol): {max_sharpe_port['Risk']:.2%}
+                    # --- 6. AI ANALYST COMMENTARY ---
+                    st.markdown("---")
+                    st.subheader("🧠 The AI Analyst's Review")
+                    
+                    # Logic to generate text
+                    best_asset = allocation_df.sort_values(by="Weight", ascending=False).iloc[0]
+                    risk_level = "High" if max_sharpe_port['Risk'] > 0.20 else "Moderate" if max_sharpe_port['Risk'] > 0.12 else "Low"
+                    
+                    st.write(f"""
+                    Based on the simulation of **{start_date.year} to {end_date.year}** data:
+                    
+                    * **Winning Strategy:** The model suggests heavily weighting **{best_asset['Asset']}** ({best_asset['Weight']:.1%} allocation). This stock has historically provided the best returns relative to its stability.
+                    * **Risk Profile:** This portfolio has a **{risk_level}** risk profile ({max_sharpe_port['Risk']:.1%} volatility). 
+                    * **Tax Efficiency:** You are losing approximately **{(max_sharpe_port['Return'] - max_sharpe_port['Post_Tax_Return']):.1%}** of your gains to taxes annually. 
                     """)
+                    
+                    with st.expander("📚 Terminology Guide (Click to Learn)"):
+                        st.write("""
+                        * **Sharpe Ratio:** The 'Efficiency Score' of a portfolio. A higher number means you are getting more return for every unit of risk you take.
+                        * **Volatility:** How much the portfolio value bounces up and down. Lower is generally better for peace of mind.
+                        * **Efficient Frontier:** The curve on the graph. Any portfolio ON the line is 'Efficient'. Anything below it is 'Bad' (taking risk without getting enough return).
+                        """)
 
-                # --- 6. RAW DATA ---
-                with st.expander("See Raw Data (Correlation Matrix)"):
-                    st.write("Correlation between assets (important for diversification):")
-                    st.dataframe(daily_returns.corr().style.background_gradient(cmap='coolwarm'))
-
-        except Exception as e:
-            st.error(f"An error occurred: {e}")
+            except Exception as e:
+                st.error(f"Something went wrong: {e}")
 
 else:
-    st.info("👈 Enter stock tickers in the sidebar (e.g., RELIANCE.NS for NSE) and hit 'Run Optimization'")
+    st.info("👈 Select your stocks from the dropdown and click 'Run Optimization' to start.")
