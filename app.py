@@ -232,3 +232,59 @@ with tab2:
     st.latex(r'''
     R_{post-tax} = R_{pre-tax} \times (1 - TaxRate)
     ''')
+
+
+st.warning(f"""... If the market crashes tomorrow...""")
+# --- 7. DEEP DIVE VISUALS (NEW ADDITION) ---
+                        st.divider()
+                        st.subheader("🔬 Deep Dive: Correlation & Drawdown")
+                        
+                        d_col1, d_col2 = st.columns(2)
+
+                        with d_col1:
+                            st.markdown("#### Correlation Matrix")
+                            st.caption("How closely do these assets move together? (Light = High Correlation, Dark = Low)")
+                            
+                            # Calculate Correlation
+                            corr_matrix = daily_returns.corr()
+                            
+                            # Plot Heatmap using Plotly
+                            fig_corr = px.imshow(
+                                corr_matrix, 
+                                text_auto=True, 
+                                aspect="auto",
+                                color_continuous_scale='RdBu_r', # Red = High Corr (Bad for diversity)
+                                origin='lower'
+                            )
+                            st.plotly_chart(fig_corr, use_container_width=True)
+                            
+                            st.info("""
+                            **Quant Tip:** You want a portfolio with **lower** correlation numbers (darker colors). 
+                            If everything is '1.0', your portfolio is not diversified!
+                            """)
+
+                        with d_col2:
+                            st.markdown("#### Max Drawdown (The 'Pain' Chart)")
+                            st.caption("Percentage fall from the highest peak value over time.")
+                            
+                            # Calculate Cumulative Return of the Optimized Portfolio
+                            # We assume we rebalance daily to the optimal weights (simplified)
+                            cumulative_returns = (1 + daily_returns.dot(optimal_weights)).cumprod()
+                            
+                            # Calculate Drawdown
+                            peak = cumulative_returns.cummax()
+                            drawdown = (cumulative_returns - peak) / peak
+                            
+                            # Plot Drawdown
+                            fig_dd = px.area(
+                                drawdown, 
+                                title="Portfolio Drawdown History",
+                                labels={'value': 'Drawdown %', 'Date': 'Year'},
+                                color_discrete_sequence=['red']
+                            )
+                            # Fix the Y-axis to look like percentage
+                            fig_dd.update_layout(yaxis_tickformat='.0%')
+                            st.plotly_chart(fig_dd, use_container_width=True)
+
+                            max_dd = drawdown.min()
+                            st.error(f"**Max Historical Drawdown:** {max_dd:.1%} (The worst crash this portfolio faced)")
