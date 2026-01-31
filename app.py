@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 from textblob import TextBlob
-from GoogleNews import GoogleNews
+from GoogleNews import GoogleNews # New reliable news source
 
 # --- 1. CONFIGURATION & TITLE ---
 st.set_page_config(page_title="Tax-Efficient Quant Optimizer", layout="wide")
@@ -38,32 +38,32 @@ end_date = st.sidebar.date_input("End Date", pd.to_datetime("today"))
 @st.cache_data
 def get_stock_data(tickers, start, end):
     if not tickers: return pd.DataFrame()
-    try:
-        data = yf.download(tickers, start=start, end=end)['Close']
-        return data
-    except Exception:
-        return pd.DataFrame()
+    data = yf.download(tickers, start=start, end=end)['Close']
+    return data
 
-# --- 4. SENTIMENT ENGINE (ROBUST GOOGLE NEWS) ---
+# --- 4. SENTIMENT ENGINE (UPDATED TO GOOGLE NEWS) ---
 def get_sentiment(tickers):
     sentiment_data = []
+    googlenews = GoogleNews(lang='en', region='IN', period='1d') # Look for news from the last 24h
     
     for ticker in tickers:
         try:
-            # Clean ticker for better search (e.g., "TCS.NS" -> "TCS India stock news")
+            # Clean the ticker: "RELIANCE.NS" -> "RELIANCE stock" for better search results
             clean_name = ticker.replace(".NS", "")
-            search_term = f"{clean_name} India stock news"
+            search_term = f"{clean_name} stock news"
             
-            googlenews = GoogleNews(lang='en', region='IN', period='1d')
-            googlenews.clear()
+            # Fetch News
+            googlenews.clear() # Clear past results
             googlenews.search(search_term)
             result = googlenews.result()
             
-            if result and len(result) > 0:
-                # Analyze top 2 headlines
-                top_headlines = " ".join([item['title'] for item in result[:2]])
+            if result:
+                # Combine top 3 headlines for analysis
+                top_3_headlines = " ".join([item['title'] for item in result[:3]])
                 latest_headline = result[0]['title']
-                analysis = TextBlob(top_headlines)
+                
+                # Analyze Sentiment
+                analysis = TextBlob(top_3_headlines)
                 score = analysis.sentiment.polarity
             else:
                 score = 0
@@ -76,12 +76,7 @@ def get_sentiment(tickers):
             })
             
         except Exception as e:
-             # Fallback if Google News fails (prevents app crash)
-             sentiment_data.append({
-                 "Asset": ticker, 
-                 "Sentiment Score": 0, 
-                 "Latest News": "News unavailable (Connection Limit)"
-             })
+             sentiment_data.append({"Asset": ticker, "Sentiment Score": 0, "Latest News": "Could not fetch data"})
              
     return pd.DataFrame(sentiment_data)
 
@@ -93,12 +88,12 @@ with tab1:
         if len(selected_tickers) < 2:
             st.error("⚠️ Please select at least 2 stocks.")
         else:
-            with st.spinner('Calculating Efficient Frontier...'):
+            with st.spinner('Calculating Efficient Frontier, Risk Metrics & Correlations...'):
                 try:
                     df = get_stock_data(selected_tickers, start_date, end_date)
                     
                     if df.empty:
-                        st.error("No data returned. Try different dates or tickers.")
+                        st.error("No data returned. Try different dates.")
                     else:
                         daily_returns = df.pct_change().dropna()
                         
@@ -117,12 +112,7 @@ with tab1:
 
                             port_return = np.sum(mean_daily_returns * weights) * 252
                             port_std_dev = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights))) * np.sqrt(252)
-                            
-                            # Safe division for Sharpe
-                            if port_std_dev == 0:
-                                sharpe_ratio = 0
-                            else:
-                                sharpe_ratio = (port_return - 0.06) / port_std_dev
+                            sharpe_ratio = (port_return - 0.06) / port_std_dev
 
                             sim_returns = daily_returns.dot(weights)
                             var_95 = np.percentile(sim_returns, 5)
@@ -149,34 +139,70 @@ with tab1:
                         
                         col1, col2, col3, col4 = st.columns(4)
                         col1.metric("💰 Annual Return", f"{max_sharpe_port['Return']:.1%}", delta=f"Post-Tax: {max_sharpe_port['Post_Tax_Return']:.1%}")
-                        col2.metric("📉 Volatility", f"{max_sharpe_port['Risk']:.1%}")
-                        col3.metric("⚠️ 95% VaR", f"{max_sharpe_port['VaR_95']:.2%}")
-                        col4.metric("☢️ 95% CVaR", f"{max_sharpe_port['CVaR_95']:.2%}")
+                        col2.metric("📉 Volatility (Risk)", f"{max_sharpe_port['Risk']:.1%}")
+                        col3.metric("⚠️ 95% VaR", f"{max_sharpe_port['VaR_95']:.2%}", help="Minimum loss on the worst 5% of days")
+                        col4.metric("☢️ 95% CVaR", f"{max_sharpe_port['CVaR_95']:.2%}", help="Average loss when things go really bad")
 
                         # --- CHARTS ---
                         c1, c2 = st.columns([2,1])
+                        
                         with c1:
                             st.subheader("Efficient Frontier")
-                            fig = px.scatter(sim_df, x='Risk', y='Return', color='Sharpe', title="Risk vs Return Landscape")
-                            fig.add_scatter(x=[max_sharpe_port['Risk']], y=[max_sharpe_port['Return']], mode='markers', marker=dict(color='red', size=20, symbol='star'), name='Optimal Portfolio')
+                            fig = px.scatter(
+                                sim_df, x='Risk', y='Return', color='Sharpe',
+                                title="Risk vs Return Landscape", color_continuous_scale='Viridis'
+                            )
+                            fig.add_scatter(x=[max_sharpe_port['Risk']], y=[max_sharpe_port['Return']], 
+                                            mode='markers', marker=dict(color='red', size=20, symbol='star'),
+                                            name='Optimal Portfolio')
                             st.plotly_chart(fig, use_container_width=True)
 
                         with c2:
                             st.subheader("Optimal Allocation")
                             alloc_df = pd.DataFrame({'Asset': selected_tickers, 'Weight': optimal_weights})
-                            alloc_df = alloc_df[alloc_df['Weight'] > 0.01].sort_values(by="Weight", ascending=False)
+                            alloc_df = alloc_df[alloc_df['Weight'] > 0.01] 
+                            alloc_df = alloc_df.sort_values(by="Weight", ascending=False)
                             fig_pie = px.pie(alloc_df, values='Weight', names='Asset', hole=0.4)
                             st.plotly_chart(fig_pie, use_container_width=True)
 
+                        # --- SCENARIO ANALYSIS ---
+                        st.divider()
+                        st.subheader("📝 Analysis & Real-World Example")
+                        
+                        ex_col1, ex_col2 = st.columns(2)
+                        
+                        with ex_col1:
+                            st.markdown("#### 1. What is happening?")
+                            top_stock = alloc_df.iloc[0]
+                            st.write(f"""
+                            The algorithm ran **5,000 simulations** and suggests allocating **{top_stock['Weight']:.1%}** to **{top_stock['Asset']}**.
+                            This balance maximizes return for your accepted level of risk.
+                            """)
+                        
+                        with ex_col2:
+                            st.markdown("#### 2. The ₹1 Lakh Example")
+                            investment = 100000
+                            profit_pre_tax = investment * max_sharpe_port['Return']
+                            tax_bill = profit_pre_tax * tax_impact
+                            profit_post_tax = profit_pre_tax - tax_bill
+                            
+                            st.write(f"""
+                            * **Expected Profit (Pre-Tax):** ₹{profit_pre_tax:,.0f}
+                            * **Tax Bill (@{tax_rate}%):** -₹{tax_bill:,.0f}
+                            * **Net Profit:** **₹{profit_post_tax:,.0f}**
+                            """)
+
                         # --- DEEP DIVE ---
                         st.divider()
-                        st.subheader("🔬 Deep Dive")
+                        st.subheader("🔬 Deep Dive: Correlation & Drawdown")
                         d_col1, d_col2 = st.columns(2)
+
                         with d_col1:
                             st.markdown("#### Correlation Matrix")
                             corr_matrix = daily_returns.corr()
                             fig_corr = px.imshow(corr_matrix, text_auto=True, aspect="auto", color_continuous_scale='RdBu_r', origin='lower')
                             st.plotly_chart(fig_corr, use_container_width=True)
+
                         with d_col2:
                             st.markdown("#### Max Drawdown")
                             cumulative_returns = (1 + daily_returns.dot(optimal_weights)).cumprod()
@@ -186,7 +212,7 @@ with tab1:
                             st.plotly_chart(fig_dd, use_container_width=True)
 
                 except Exception as e:
-                    st.error(f"Calculation Error: {e}")
+                    st.error(f"Error: {e}")
     else:
         st.info("👈 Use the sidebar to select assets and click 'Run Optimization'")
 
@@ -198,20 +224,30 @@ with tab2:
         with st.spinner("Searching Google News & analyzing sentiment..."):
             sent_df = get_sentiment(selected_tickers)
             
-            if not sent_df.empty:
-                avg_sentiment = sent_df['Sentiment Score'].mean()
-                sentiment_label = "Positive 🟢" if avg_sentiment > 0.05 else "Negative 🔴" if avg_sentiment < -0.05 else "Neutral ⚪"
-                
-                st.metric("Overall Portfolio Mood", sentiment_label, delta=f"{avg_sentiment:.3f} Score")
-                
-                # Using standard dataframe instead of styled version to prevent matplotlib errors
-                st.dataframe(sent_df, use_container_width=True)
-            else:
-                st.warning("No sentiment data could be generated.")
+            # Display Key Metrics
+            avg_sentiment = sent_df['Sentiment Score'].mean()
+            sentiment_label = "Positive 🟢" if avg_sentiment > 0.05 else "Negative 🔴" if avg_sentiment < -0.05 else "Neutral ⚪"
+            
+            st.metric("Overall Portfolio Mood", sentiment_label, delta=f"{avg_sentiment:.3f} Score")
+            
+            # Display detailed Dataframe with styling
+            st.dataframe(
+                sent_df.style.background_gradient(subset=['Sentiment Score'], cmap='RdYlGn', vmin=-0.5, vmax=0.5),
+                use_container_width=True
+            )
+            
+            st.info("""
+            **How it works:**
+            * **Score > 0:** The news language is generally positive/optimistic.
+            * **Score < 0:** The news language is generally negative/pessimistic.
+            * We search Google News for headlines (e.g., 'TCS stock news') and analyze the text.
+            """)
 
 with tab3:
     st.header("🧠 The Math Behind the Model")
     st.markdown("### 1. Sharpe Ratio")
     st.latex(r'''Sharpe = \frac{R_p - R_f}{\sigma_p}''')
     st.markdown("### 2. Value at Risk (VaR)")
-    st.latex(r'''VaR_{\alpha} = \mu + z_{\alpha
+    st.latex(r'''VaR_{\alpha} = \mu + z_{\alpha} \cdot \sigma''')
+    st.markdown("### 3. Tax Drag")
+    st.latex(r'''R_{post-tax} = R_{pre-tax} \times (1 - TaxRate)''')
